@@ -150,6 +150,40 @@ def remove_edge(session_id: str, edge_id: str) -> str:
     return f"Edge '{edge_id}' not found."
 
 @mcp.tool()
+def update_node_position(session_id: str, node_id: str, x: float, y: float) -> str:
+    """
+    Updates the visual position of a node in the graph.
+    Use this to programmatically arrange nodes or save AI-generated layouts.
+
+    Args:
+        session_id: The target session ID.
+        node_id: The ID of the node to move.
+        x: The new X coordinate.
+        y: The new Y coordinate.
+    """
+    logger.info(f"Tool Call: update_node_position(session_id={session_id}, node_id={node_id}, x={x}, y={y})")
+    if graph.update_node_position(session_id, node_id, x, y):
+        return f"Position updated for '{node_id}' to ({x}, {y})"
+    return f"Node '{node_id}' not found in session '{session_id}'."
+
+@mcp.tool()
+def batch_update_positions(session_id: str, positions: List[Dict[str, Any]]) -> str:
+    """
+    Updates positions for multiple nodes in one call.
+    Use this for efficient bulk layout updates.
+
+    Args:
+        session_id: The target session ID.
+        positions: A list of dicts, each with 'node_id', 'x', 'y' keys.
+    """
+    logger.info(f"Tool Call: batch_update_positions(session_id={session_id}, count={len(positions)})")
+    updated = 0
+    for pos in positions:
+        if graph.update_node_position(session_id, pos['node_id'], pos['x'], pos['y']):
+            updated += 1
+    return f"Updated positions for {updated}/{len(positions)} nodes."
+
+@mcp.tool()
 def search_nodes(session_id: str, query: str) -> str:
     """
     Search for nodes in a session matching a query string.
