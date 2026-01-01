@@ -163,12 +163,12 @@ const nodeIcons: Record<string, any> = {
 };
 
 const nodeColors: Record<string, string> = {
-    file: 'from-slate-500/10 to-slate-600/10 border-slate-500/30',
-    class: 'from-emerald-500/10 to-emerald-600/10 border-emerald-500/30',
-    function: 'from-violet-500/10 to-violet-600/10 border-violet-500/30',
-    logic: 'from-orange-500/10 to-orange-600/10 border-orange-500/30',
-    logic_group: 'from-blue-500/10 to-blue-600/10 border-blue-500/30 border-dashed',
-    data: 'from-sky-500/10 to-sky-600/10 border-sky-500/30',
+    file: 'from-slate-500/20 to-slate-600/20 border-slate-500/40',
+    class: 'from-emerald-500/20 to-emerald-600/20 border-emerald-500/40',
+    function: 'from-violet-500/20 to-violet-600/20 border-violet-500/40',
+    logic: 'from-orange-500/20 to-orange-600/20 border-orange-500/40',
+    logic_group: 'from-blue-500/20 to-blue-600/20 border-blue-500/40 border-dashed',
+    data: 'from-sky-500/20 to-sky-600/20 border-sky-500/40',
 };
 
 const CustomNode = memo(({ id, data, selected }: NodeProps<Node<NodeData>>) => {
@@ -286,7 +286,6 @@ const Sidebar: React.FC<{ selectedNode: Node<NodeData> | null; codeSnippet: Code
                             </div>
                         </Card>
                     </section>
-
                     {codeSnippet && (
                         <section className="animate-in fade-in slide-in-from-bottom-4 duration-700">
                             <div className="text-[10px] font-bold text-muted-foreground uppercase tracking-[0.2em] mb-4 opacity-70">Context Explorer</div>
@@ -324,9 +323,6 @@ const Sidebar: React.FC<{ selectedNode: Node<NodeData> | null; codeSnippet: Code
     );
 };
 
-
-
-
 const CodeLogicGraph: React.FC = () => {
 
     const {
@@ -349,10 +345,50 @@ const CodeLogicGraph: React.FC = () => {
 
     const { theme, toggleTheme } = useTheme();
 
+    useEffect(() => {
+        console.log("%c [VisualSynapse] Running EDITED version (Search & Highlight Features Active) ", "background: #222; color: #bada55; font-size: 12px; padding: 4px; border-radius: 4px;");
+    }, []);
+
+
+    const [selectedNode, setSelectedNode] = useState<Node<NodeData> | null>(null);
+    const [codeSnippet, setCodeSnippet] = useState<CodeSnippet | null>(null);
+    const [isFullscreen, setIsFullscreen] = useState(false);
+    const [wsStatus, setWsStatus] = useState<'connected' | 'disconnected' | 'connecting'>('disconnected');
+    const [sessions, setSessions] = useState<string[]>(['default']);
+    const [activeSession, setActiveSession] = useState<string>(() => {
+        const params = new URLSearchParams(window.location.search);
+        return params.get('session') || 'default';
+    });
+    const [searchQuery, setSearchQuery] = useState("");
+
     const nodes = React.useMemo(() => {
         // [User Requested Manual Logic] - Explicit BFS for control
         const visibleNodeIds = new Set<string>();
         const nodeMap = new Map(allNodes.map(n => [n.id, n]));
+
+        // Search Logic: Auto-expand path to matches
+        const forcedExpansion = new Set<string>();
+        const matchedNodeIds = new Set<string>();
+
+        if (searchQuery.length > 0) {
+            const lowerQuery = searchQuery.toLowerCase();
+            allNodes.forEach(node => {
+                if (node.data.label.toLowerCase().includes(lowerQuery)) {
+                    matchedNodeIds.add(node.id);
+                    // Walk up parents to force expansion
+                    let curr = node;
+                    while (curr) {
+                        const pid = curr.data.parentId || (curr.data as any).parent;
+                        if (pid && nodeMap.has(pid)) {
+                            forcedExpansion.add(pid);
+                            curr = nodeMap.get(pid)!;
+                        } else {
+                            break;
+                        }
+                    }
+                }
+            });
+        }
 
         // 1. Identify Roots
         allNodes.forEach(node => {
@@ -367,26 +403,19 @@ const CodeLogicGraph: React.FC = () => {
         while (queue.length > 0) {
             const parentId = queue.shift()!;
 
+            // Expand if User expanded OR Search forced expansion
+            const isExpanded = expandedNodeIds.has(parentId) || forcedExpansion.has(parentId);
+
             // Only search for children if the parent is marked as expanded
-            if (expandedNodeIds.has(parentId)) {
+            if (isExpanded) {
                 const parentNode = nodeMap.get(parentId);
                 const childrenIds = parentNode?.data.children || (parentNode?.data as any)?.children;
 
                 if (Array.isArray(childrenIds) && childrenIds.length > 0) {
-                    // FAST PATH: Backend provided children list
                     childrenIds.forEach((childId: string) => {
                         if (nodeMap.has(childId) && !visibleNodeIds.has(childId)) {
                             visibleNodeIds.add(childId);
                             queue.push(childId);
-                        }
-                    });
-                } else {
-                    // SLOW PATH: Scan all nodes for matching parentId (legacy/fallback)
-                    allNodes.forEach(n => {
-                        const pId = n.data.parentId || (n.data as any).parent;
-                        if (pId === parentId && !visibleNodeIds.has(n.id)) {
-                            visibleNodeIds.add(n.id);
-                            queue.push(n.id);
                         }
                     });
                 }
@@ -397,26 +426,16 @@ const CodeLogicGraph: React.FC = () => {
             ...n,
             data: {
                 ...n.data,
-                expanded: expandedNodeIds.has(n.id)
+                expanded: expandedNodeIds.has(n.id) || forcedExpansion.has(n.id),
+                isMatch: matchedNodeIds.has(n.id)
             }
         }));
-    }, [allNodes, expandedNodeIds]);
+    }, [allNodes, expandedNodeIds, searchQuery]);
 
     const edges = React.useMemo(() => {
         return useGraphStore.getState().getVisibleEdges();
     }, [allEdges, nodes]);
 
-
-    const [selectedNode, setSelectedNode] = useState<Node<NodeData> | null>(null);
-    const [codeSnippet, setCodeSnippet] = useState<CodeSnippet | null>(null);
-    const [isFullscreen, setIsFullscreen] = useState(false);
-    const [wsStatus, setWsStatus] = useState<'connected' | 'disconnected' | 'connecting'>('disconnected');
-    const [sessions, setSessions] = useState<string[]>(['default']);
-    const [activeSession, setActiveSession] = useState<string>(() => {
-        const params = new URLSearchParams(window.location.search);
-        return params.get('session') || 'default';
-    });
-    const [searchQuery, setSearchQuery] = useState("");
 
     const fetchSessions = useCallback(async () => {
         try {

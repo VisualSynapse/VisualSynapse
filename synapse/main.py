@@ -862,6 +862,7 @@ def run_server(host: str = "0.0.0.0", port: int = 8080):
         
     try:
         logger.info(f"Initializing VisualSynapse Web UI on http://localhost:{port}")
+        logger.info(">>> RUNNING EDITED VERSION: Persisted Sessions & Enhanced Path Resolution Active <<<")
         config = uvicorn.Config(app, host=host, port=port, log_config=None)
         server = uvicorn.Server(config)
         server.run()

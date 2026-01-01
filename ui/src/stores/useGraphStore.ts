@@ -166,7 +166,21 @@ export const useGraphStore = create<GraphState>((set, get) => ({
                 target: edgeData.data?.target,
                 animated: edgeData.data?.type === 'call' || edgeData.data?.type === 'data',
                 label: edgeData.data?.label,
-                style: { stroke: edgeData.data?.type === 'data' ? '#38bdf8' : '#64748b' },
+                style: {
+                    stroke: (() => {
+                        const t = edgeData.data?.type || 'default';
+                        const l = (edgeData.data?.label || '').toLowerCase();
+
+                        if (t === 'data' || t === 'data_flow') return '#38bdf8'; // Sky
+                        if (t === 'call' || t === 'calls' || l.includes('calls') || l.includes('route') || l.includes('flow')) return '#8b5cf6'; // Violet
+                        if (t === 'inherits' || l.includes('inherits')) return '#10b981'; // Emerald
+                        if (t === 'import' || t === 'imports' || l.includes('import')) return '#f59e0b'; // Amber
+                        if (l === 'contains' || t === 'structure') return '#475569'; // Slate (Darker)
+
+                        return '#64748b'; // Default Slate
+                    })(),
+                    strokeWidth: 1.5,
+                },
                 labelStyle: { fill: '#666', fontSize: 10, fontFamily: 'system-ui, sans-serif' },
                 labelBgStyle: { fill: 'transparent' },
                 labelBgPadding: [4, 2] as [number, number],
