@@ -25,8 +25,9 @@ logger = logging.getLogger("visual_base")
 
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-SESSIONS_DIR = os.path.join(os.path.dirname(BASE_DIR), "sessions")
-PORT_FILE = os.path.join(BASE_DIR, ".ui_port")
+# Store sessions in user's home directory so both MCP (uvx) and UI serve share data
+SESSIONS_DIR = os.path.join(os.path.expanduser("~/.visualsynapse"), "sessions")
+PORT_FILE = os.path.join(os.path.dirname(SESSIONS_DIR), ".ui_port")
 
 
 graph = GraphManager(sessions_dir=SESSIONS_DIR)

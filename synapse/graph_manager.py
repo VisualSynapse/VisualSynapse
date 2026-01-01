@@ -29,8 +29,8 @@ class GraphManager:
         conn = sqlite3.connect(path)
         conn.row_factory = sqlite3.Row
         
-        if is_new:
-            self._init_db_schema(conn)
+        # Always ensure schema is initialized (idempotent)
+        self._init_db_schema(conn)
             
         try:
             yield conn
