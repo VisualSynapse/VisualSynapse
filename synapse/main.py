@@ -706,7 +706,7 @@ async def get_graph_api(session_id: str = "default", parent_id: Optional[str] = 
     
     return {"elements": {"nodes": filtered_nodes, "edges": filtered_edges}}
 
-@app.patch("/api/sessions/{session_id}/nodes/{node_id}/position")
+@app.patch("/api/sessions/{session_id}/nodes/{node_id:path}/position")
 async def update_node_position(session_id: str, node_id: str, payload: PositionPayload):
     try:
         graph.update_node_position(session_id, node_id, payload.x, payload.y)
@@ -718,7 +718,7 @@ async def update_node_position(session_id: str, node_id: str, payload: PositionP
 class HighlightPayload(BaseModel):
     color: Optional[str] = None
 
-@app.patch("/api/sessions/{session_id}/nodes/{node_id}/highlight")
+@app.patch("/api/sessions/{session_id}/nodes/{node_id:path}/highlight")
 async def update_node_highlight(session_id: str, node_id: str, payload: HighlightPayload):
     try:
         success = graph.update_node_highlight(session_id, node_id, payload.color)
