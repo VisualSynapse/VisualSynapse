@@ -39,6 +39,11 @@ def create_session(session_id: str) -> str:
     """
     Creates a new graph session.
     
+    IMPORTANT: Only create a new session when explicitly requested by the user.
+    When working with the same codebase or making incremental changes to existing graphs,
+    reuse the current session instead of creating a new one. Creating unnecessary sessions
+    clutters the workspace and loses context from previous work.
+    
     Args:
         session_id: A unique identifier for the session.
     """
