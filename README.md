@@ -13,22 +13,39 @@ Under active development. Core functionality works but expect rough edges.
 
 ## Installation
 
-Requires Python 3.10+ and UV.
-
-```bash
-uv pip install git+https://github.com/visualsynapse/visualsynapse
-```
-
-Or run directly without installing:
+### Method 1: Run directly (Recommended)
+You can run the latest version directly without installing anything manually:
 
 ```bash
 uvx --from git+https://github.com/visualsynapse/visualsynapse synapse serve
 ```
 
+### Method 2: Install as a tool
+To have the `synapse` command available globally:
+
+```bash
+uv tool install git+https://github.com/visualsynapse/visualsynapse
+synapse serve --port 8080
+```
+
+### Method 3: Development / From Source
+If you have cloned the repository:
+
+1. Sync dependencies:
+   ```bash
+   uv sync
+   ```
+2. Run using `uv run` (handles environment automatically):
+   ```bash
+   uv run synapse serve
+   ```
+
 ## Usage
 
-### As MCP Server
+### Web UI
+Start the server using one of the methods above. Then open [http://localhost:8080](http://localhost:8080) in your browser.
 
+### As MCP Server
 Add to your MCP config:
 
 ```json
@@ -39,16 +56,6 @@ Add to your MCP config:
   }
 }
 ```
-
-### Web UI
-
-Start the server:
-
-```bash
-synapse serve --port 8080
-```
-
-Open http://localhost:8080 in your browser.
 
 ## What it does
 
