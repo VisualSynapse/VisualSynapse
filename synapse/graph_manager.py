@@ -215,16 +215,38 @@ class GraphManager:
                     if not child_node.get('parentId'):
                         child_node['parentId'] = parent_id
         
-        # STEP 2: Build children arrays from parentId
+        # STEP 2: Build children arrays from ALL outgoing edges (Connectivity Navigation)
+        # Initialize children arrays
         for n in nodes:
-            parent_id = n.get('parentId')
-            if parent_id and parent_id in node_map:
-                parent = node_map[parent_id]
-                if 'children' not in parent:
-                    parent['children'] = []
-                if n['id'] not in parent['children']:
-                    parent['children'].append(n['id'])
+            if 'children' not in n:
+                n['children'] = []
+
+        # Populate based on edges
+        edge_map = {} # source -> set(targets)
+        for e in edges:
+            ed = e["data"]
+            src = ed.get("source")
+            tgt = ed.get("target")
+            
+            # Skip broken edges
+            if src not in node_map or tgt not in node_map:
+                continue
                 
+            if src not in edge_map:
+                edge_map[src] = []
+            if tgt not in edge_map[src]:
+                edge_map[src].append(tgt)
+
+        # Assign to nodes
+        for nid, children in edge_map.items():
+            if nid in node_map:
+                # Union with existing children (from parentId logic if any)
+                existing = set(node_map[nid].get('children', []))
+                for child in children:
+                    if child not in existing:
+                        node_map[nid]['children'].append(child)
+                        existing.add(child)
+
         final_nodes = [{"data": n} for n in nodes]
 
         return {

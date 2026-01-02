@@ -646,9 +646,9 @@ const CodeLogicGraph: React.FC = () => {
                 useGraphStore.getState().setTemporaryHighlight(node.id);
             }
 
-            if (node.data.children && node.data.children.length > 0) {
-                useGraphStore.getState().toggleNode(node.id);
-            }
+            // if (node.data.children && node.data.children.length > 0) {
+            //     useGraphStore.getState().toggleNode(node.id);
+            // }
 
             const file = node.data.filename || (node.data.metadata as any)?.file;
             const line = node.data.lineno || (node.data.metadata as any)?.lineno;
@@ -661,9 +661,8 @@ const CodeLogicGraph: React.FC = () => {
     );
 
     const onNodeDoubleClick = useCallback(
-        (_event: React.MouseEvent, node: Node<NodeData>) => {
-            const { toggleNode } = useGraphStore.getState();
-            toggleNode(node.id);
+        (_event: React.MouseEvent, _node: Node<NodeData>) => {
+            // Expand/collapse ONLY via chevron icon in CustomNode
         },
         []
     );

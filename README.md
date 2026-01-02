@@ -1,11 +1,11 @@
 # VisualSynapse
 
 <p align="center">
-  <img src="ui/public/logo.png" alt="VisualSynapse" width="200" height="200">
+  <img src="assets/showcase.png" alt="VisualSynapse Showcase" width="100%" style="border-radius: 10px; box-shadow: 0 10px 30px rgba(0,0,0,0.2);">
 </p>
 
-A code visualization tool that turns source code, files, and entire folder structures into interactive graphs. With AI assistance, you can map anything from a single function to a full project hierarchy.
 
+A code visualization tool that turns source code, files, and entire folder structures into interactive graphs. With AI assistance, you can map anything from a single function to a full project hierarchy.
 
 ## Status
 
