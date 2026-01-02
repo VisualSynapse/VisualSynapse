@@ -59,6 +59,15 @@ import { useShallow } from 'zustand/react/shallow';
 const DropdownMenu = DropdownMenuPrimitive.Root;
 const DropdownMenuTrigger = DropdownMenuPrimitive.Trigger;
 const DropdownMenuGroup = DropdownMenuPrimitive.Group;
+
+const COGNITIVE_CLARITY_PALETTE = [
+    '#9d4edd', // Amethyst (Cognitive)
+    '#3a86ff', // Azure (Data)
+    '#ffbe0b', // Amber (Focus)
+    '#fb5607', // Fuchsia (Logic)
+    '#10b981', // Emerald (Safe)
+];
+
 const DropdownMenuPortal = DropdownMenuPrimitive.Portal;
 const DropdownMenuRadioGroup = DropdownMenuPrimitive.RadioGroup;
 
@@ -518,39 +527,57 @@ const CodeLogicGraph: React.FC = () => {
         fetchSessions();
         fetchGraphData();
 
+        let ws: WebSocket | null = null;
+        let reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
+        let isUnmounting = false;
+
         const connectWebSocket = () => {
+            if (isUnmounting) return;
+
             try {
                 setWsStatus('connecting');
+                // Use explicit port 8080 logic if needed, but relative path is safer if proxy handles it.
+                // Assuming Vite proxy works:
                 const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-                const ws = new WebSocket(`${protocol}//${window.location.host}/ws?session_id=${activeSession}`);
+                // If we are on dev server (e.g. 5173), we rely on proxy.
+                // If we are getting CORS errors, it implies direct connection might be safer or proxy is failing.
+                // Let's stick to window.location.host for now as proxy is configured.
+                ws = new WebSocket(`${protocol}//${window.location.host}/ws?session_id=${activeSession}`);
 
-                ws.onopen = () => setWsStatus('connected');
+                ws.onopen = () => {
+                    if (!isUnmounting) setWsStatus('connected');
+                };
 
                 ws.onmessage = (event) => {
+                    if (isUnmounting) return;
                     const message = JSON.parse(event.data);
                     if (message.type === 'graph_update' && message.session_id === activeSession) {
                         if (message.data && message.data.elements) {
-
-
                             updateGraph(message.data.elements.nodes, message.data.elements.edges);
                         }
                     }
                 };
 
                 ws.onclose = () => {
+                    if (isUnmounting) return;
                     setWsStatus('disconnected');
-                    setTimeout(connectWebSocket, 5000);
+                    // Clean up existing timeout if any
+                    if (reconnectTimeout) clearTimeout(reconnectTimeout);
+                    reconnectTimeout = setTimeout(connectWebSocket, 5000);
                 };
 
-                return ws;
             } catch (error) {
-                setWsStatus('disconnected');
-                return null;
+                if (!isUnmounting) setWsStatus('disconnected');
             }
         };
 
-        const ws = connectWebSocket();
-        return () => ws?.close();
+        connectWebSocket();
+
+        return () => {
+            isUnmounting = true;
+            if (ws) ws.close();
+            if (reconnectTimeout) clearTimeout(reconnectTimeout);
+        };
     }, [activeSession, fetchGraphData, fetchSessions, updateGraph]);
 
 
@@ -584,9 +611,40 @@ const CodeLogicGraph: React.FC = () => {
     );
 
     const onNodeClick = useCallback(
-        (_event: React.MouseEvent, node: Node<NodeData>) => {
+        (event: React.MouseEvent, node: Node<NodeData>) => {
             console.log(`[Synapse] Node clicked: ${node.id} (${node.data.type})`);
             setSelectedNode(node);
+
+            // [Interaction] Smart Highlighting Logic
+            const isPersistent = event.shiftKey;
+
+            if (isPersistent) {
+                // Persistent Toggle (Backend + Local State)
+                const currentColor = node.data.highlightColor;
+                const newColor = currentColor
+                    ? null // If already colored, toggle OFF
+                    : COGNITIVE_CLARITY_PALETTE[Math.abs(node.id.split('').reduce((a, b) => a + b.charCodeAt(0), 0)) % COGNITIVE_CLARITY_PALETTE.length]; // Deterministic Hash
+
+
+                console.log(`[Synapse] Toggling persistent highlight for ${node.id}: ${newColor}`);
+
+                // Optimistic UI Update (Fast)
+                useGraphStore.getState().updateGraph([{
+                    id: node.id,
+                    data: { ...node.data, highlightColor: newColor }
+                }], []);
+
+                // API Call (Slow/Reliable)
+                fetch(`/api/sessions/${activeSession}/nodes/${node.id}/highlight`, {
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ color: newColor })
+                }).catch(err => console.error("Failed to persist highlight", err));
+
+            } else {
+                // Temporary Highlight (Local Only)
+                useGraphStore.getState().setTemporaryHighlight(node.id);
+            }
 
             if (node.data.children && node.data.children.length > 0) {
                 useGraphStore.getState().toggleNode(node.id);
@@ -599,7 +657,7 @@ const CodeLogicGraph: React.FC = () => {
                 fetchCodeSnippet(file, line);
             }
         },
-        [fetchCodeSnippet]
+        [fetchCodeSnippet, activeSession]
     );
 
     const onNodeDoubleClick = useCallback(

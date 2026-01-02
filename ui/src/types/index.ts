@@ -11,6 +11,7 @@ export interface NodeData {
     level?: number;
     id?: string;
     position?: { x: number; y: number };
+    highlightColor?: string;
     [key: string]: unknown;
 }
 

@@ -81,6 +81,28 @@ class GraphManager:
             conn.commit()
             return True
 
+    def update_node_highlight(self, session_id, node_id, color):
+        """Updates the highlight color of a node. Pass None to clear."""
+        with self._get_conn(session_id) as conn:
+            cursor = conn.execute("SELECT data_json FROM nodes WHERE id = ?", (node_id,))
+            row = cursor.fetchone()
+            if not row:
+                return False
+                
+            data = json.loads(row['data_json'])
+            if color:
+                data['highlightColor'] = color
+            else:
+                data.pop('highlightColor', None)
+            
+            conn.execute(
+                "UPDATE nodes SET data_json = ? WHERE id = ?",
+                (json.dumps(data), node_id)
+            )
+            conn.commit()
+            return True
+
+
     def create_session(self, session_id):
         # Just connecting initializes it via _get_conn logic
         path = self._get_db_path(session_id)

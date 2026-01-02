@@ -502,6 +502,14 @@ def export_graph(session_id: str, format: str = "json") -> str:
 
 app = FastAPI(title="VisualSynapse Server")
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 @mcp.tool()
 def list_root_nodes(session_id: str = "default") -> str:
     """
@@ -707,6 +715,22 @@ async def update_node_position(session_id: str, node_id: str, payload: PositionP
         logger.error(f"Failed to update position: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+class HighlightPayload(BaseModel):
+    color: Optional[str] = None
+
+@app.patch("/api/sessions/{session_id}/nodes/{node_id}/highlight")
+async def update_node_highlight(session_id: str, node_id: str, payload: HighlightPayload):
+    try:
+        success = graph.update_node_highlight(session_id, node_id, payload.color)
+        if not success:
+            raise HTTPException(status_code=404, detail="Node not found")
+        await manager.broadcast({"type": "graph_update", "session_id": session_id, "data": graph.get_graph(session_id)})
+        return {"status": "success"}
+    except Exception as e:
+        logger.error(f"Failed to update highlight: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/snippet")
 async def get_snippet(file: str, line: int):
     # Try different path locations
@@ -860,17 +884,17 @@ async def export_graph_api(session_id: str = "default", format: str = "markdown"
 async def websocket_endpoint(websocket: WebSocket, session_id: str = "default"):
     await manager.connect(websocket)
     try:
+        # Send initial graph state
         await websocket.send_json({"type": "graph_update", "session_id": session_id, "data": graph.get_graph(session_id)})
+        
         while True:
-            try:
-                data = await asyncio.wait_for(websocket.receive_text(), timeout=30.0)
-                if data == "ping":
-                    await websocket.send_text("pong")
-            except asyncio.TimeoutError:
-                await websocket.send_json({"type": "ping"})
-            except Exception:
-                break
+            data = await websocket.receive_text()
+            if data == "ping":
+                await websocket.send_text("pong")
     except WebSocketDisconnect:
+        manager.disconnect(websocket)
+    except Exception as e:
+        logger.error(f"WebSocket error: {e}")
         manager.disconnect(websocket)
 
 

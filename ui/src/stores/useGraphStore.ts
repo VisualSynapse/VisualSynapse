@@ -7,6 +7,7 @@ interface GraphState {
     nodes: Node<NodeData>[];
     edges: Edge[];
     expandedNodeIds: Set<string>;
+    temporaryHighlight: string | null;
 
     setGraph: (nodes: Node<NodeData>[], edges: Edge[]) => void;
     updateGraph: (newNodesData: any[], newEdgesData: any[]) => void;
@@ -14,6 +15,7 @@ interface GraphState {
     expandAll: () => void;
     collapseAll: () => void;
     resetLayout: () => void;
+    setTemporaryHighlight: (nodeId: string | null) => void;
 
     onNodesChange: OnNodesChange<Node<NodeData>>;
     onEdgesChange: OnEdgesChange;
@@ -23,8 +25,72 @@ interface GraphState {
     getVisibleEdges: () => Edge[];
 }
 
+
+
 const NODE_WIDTH = 200;
 const NODE_HEIGHT = 60;
+
+// Helper to determine edge style dynamically
+const applyEdgeStyling = (edge: Edge, nodeMap: Map<string, Node<NodeData>>, tempHighlight: string | null) => {
+    const sourceNode = nodeMap.get(edge.source);
+    const targetNode = nodeMap.get(edge.target);
+
+    // 1. Resolve effective colors (Persistent > Temporary)
+    // Does the Source imply a color?
+    let sourceColor: string | null = sourceNode?.data.highlightColor || null;
+    if (tempHighlight && edge.source === tempHighlight) sourceColor = '#06b6d4'; // Cyan-500 for active temp
+
+    // Does the Target imply a color?
+    let targetColor: string | null = targetNode?.data.highlightColor || null;
+    if (tempHighlight && edge.target === tempHighlight) targetColor = '#06b6d4';
+
+
+    // 2. Logic: Smart Coloring
+    // If Source is colored -> It pushes color to the edge (Flow)
+    // If Target is colored -> It also pushes color
+    // Conflict? Gradient.
+
+    let stroke = '#64748b'; // Default Slate
+    let strokeWidth = 1.5;
+    let animated = edge.animated;
+
+    if (sourceColor && targetColor && sourceColor !== targetColor) {
+        // Dual Highlight -> Gradient (Not standard SVG support in basic stroke, needs Marker, but for now use Source)
+        // Actually, CSS gradients on stroke are tricky in SVG without defs.
+        // Fallback: Source wins for flow
+        stroke = sourceColor;
+        strokeWidth = 3;
+        animated = true;
+    } else if (sourceColor) {
+        stroke = sourceColor;
+        strokeWidth = 3;
+        animated = true;
+    } else if (targetColor) {
+        stroke = targetColor;
+        strokeWidth = 3;
+        animated = true;
+    } else {
+        // Default Logic based on Type
+        const data = edge.data as Record<string, any> || {};
+        const t = data.type || 'default';
+        const l = (data.label || '').toLowerCase(); // Safe access
+
+        if (t === 'data' || t === 'data_flow') stroke = '#38bdf8';
+        else if (t === 'call' || t === 'calls' || l.includes('calls') || l.includes('route')) stroke = '#8b5cf6';
+        else if (t === 'inherits' || l.includes('inherits')) stroke = '#10b981';
+        else if (t === 'import' || l.includes('import')) stroke = '#f59e0b';
+        else if (l === 'contains' || t === 'structure') stroke = '#475569';
+    }
+
+    return {
+        ...edge,
+        animated,
+        style: {
+            stroke,
+            strokeWidth,
+        }
+    };
+};
 
 const applyDagreLayout = (nodes: Node<NodeData>[], edges: Edge[], preservePositions: boolean = true): Node<NodeData>[] => {
     if (nodes.length === 0) return nodes;
@@ -78,12 +144,13 @@ export const useGraphStore = create<GraphState>((set, get) => ({
     nodes: [],
     edges: [],
     expandedNodeIds: new Set<string>(),
+    temporaryHighlight: null,
 
     setGraph: (nodes, edges) => {
         console.log('[Synapse] setGraph called', { nodeCount: nodes.length, edgeCount: edges.length });
 
-
         const layoutedNodes = applyDagreLayout(nodes, edges);
+        const nodeMap = new Map(layoutedNodes.map(n => [n.id, n]));
 
         console.log('[Synapse] Graph loaded, expanding roots only by default.');
         const rootIds = layoutedNodes
@@ -91,10 +158,14 @@ export const useGraphStore = create<GraphState>((set, get) => ({
             .map(n => n.id);
         const initialExpanded = new Set(rootIds);
 
+        // Apply initial styling
+        const styledEdges = edges.map(e => applyEdgeStyling(e, nodeMap, null));
+
         set({
             nodes: layoutedNodes,
-            edges,
-            expandedNodeIds: initialExpanded
+            edges: styledEdges,
+            expandedNodeIds: initialExpanded,
+            temporaryHighlight: null
         });
     },
 
@@ -107,6 +178,21 @@ export const useGraphStore = create<GraphState>((set, get) => ({
     onEdgesChange: (changes) => {
         set({
             edges: applyEdgeChanges(changes, get().edges),
+        });
+    },
+
+    setTemporaryHighlight: (nodeId: string | null) => {
+        set((state) => {
+            if (state.temporaryHighlight === nodeId) return state; // No change
+
+            // Re-calc edges based on new temp highlight
+            const nodeMap = new Map(state.nodes.map(n => [n.id, n]));
+            const newEdges = state.edges.map(e => applyEdgeStyling(e, nodeMap, nodeId));
+
+            return {
+                temporaryHighlight: nodeId,
+                edges: newEdges
+            };
         });
     },
 
@@ -128,9 +214,6 @@ export const useGraphStore = create<GraphState>((set, get) => ({
 
                 let position = existing?.position || nodeData.position || { x: 0, y: 0 };
 
-
-
-
                 const id = nodeData.data?.id || nodeData.id;
 
                 const isRoot = !nodeData.data?.parentId && !nodeData.data?.parent;
@@ -141,9 +224,9 @@ export const useGraphStore = create<GraphState>((set, get) => ({
                     position,
                     data: {
                         ...nodeData.data,
-
-
                         expanded: state.expandedNodeIds.has(id) || isRoot,
+                        // Persist highlight color (should come from backend, but ensure it's mapped)
+                        highlightColor: nodeData.data?.highlightColor
                     }
                 } as Node<NodeData>;
             });
@@ -159,39 +242,28 @@ export const useGraphStore = create<GraphState>((set, get) => ({
                 }
             });
 
+            // Re-map for Edge Styling
+            const freshNodeMap = new Map(mergedNodes.map(n => [n.id, n]));
 
-            const mergedEdges = newEdgesData.map((edgeData: any) => ({
+            const rawEdges = newEdgesData.map((edgeData: any) => ({
                 id: edgeData.data?.id || `e-${edgeData.data?.source}-${edgeData.data?.target}`,
                 source: edgeData.data?.source,
                 target: edgeData.data?.target,
-                animated: edgeData.data?.type === 'call' || edgeData.data?.type === 'data',
                 label: edgeData.data?.label,
-                style: {
-                    stroke: (() => {
-                        const t = edgeData.data?.type || 'default';
-                        const l = (edgeData.data?.label || '').toLowerCase();
-
-                        if (t === 'data' || t === 'data_flow') return '#38bdf8'; // Sky
-                        if (t === 'call' || t === 'calls' || l.includes('calls') || l.includes('route') || l.includes('flow')) return '#8b5cf6'; // Violet
-                        if (t === 'inherits' || l.includes('inherits')) return '#10b981'; // Emerald
-                        if (t === 'import' || t === 'imports' || l.includes('import')) return '#f59e0b'; // Amber
-                        if (l === 'contains' || t === 'structure') return '#475569'; // Slate (Darker)
-
-                        return '#64748b'; // Default Slate
-                    })(),
-                    strokeWidth: 1.5,
-                },
+                data: edgeData.data,
+                // temporary defaults, wil be overwritten by styling
+                animated: false,
+                style: {},
                 labelStyle: { fill: '#666', fontSize: 10, fontFamily: 'system-ui, sans-serif' },
                 labelBgStyle: { fill: 'transparent' },
                 labelBgPadding: [4, 2] as [number, number],
-                data: edgeData.data,
             }));
 
+            const styledEdges = rawEdges.map((e: any) => applyEdgeStyling(e, freshNodeMap, state.temporaryHighlight));
 
+            const layoutedNodes = applyDagreLayout(mergedNodes as Node<NodeData>[], styledEdges as Edge[]);
 
-            const layoutedNodes = applyDagreLayout(mergedNodes as Node<NodeData>[], mergedEdges as Edge[]);
-
-            return { nodes: layoutedNodes, edges: mergedEdges, expandedNodeIds: currentExpanded };
+            return { nodes: layoutedNodes, edges: styledEdges, expandedNodeIds: currentExpanded };
         });
     },
 
@@ -253,7 +325,6 @@ export const useGraphStore = create<GraphState>((set, get) => ({
 
             if (expandedNodeIds.has(parentId)) {
                 const parentNode = nodeMap.get(parentId);
-
 
 
                 const children = parentNode?.data.children || (parentNode?.data.data as any)?.children;
