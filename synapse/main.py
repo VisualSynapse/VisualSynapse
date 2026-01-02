@@ -618,7 +618,14 @@ def get_node_details(session_id: str, node_id: str) -> str:
         "edges": {"incoming": incoming[:5], "outgoing": outgoing[:5]}
     }, indent=2)
 
-UI_DIST_DIR = os.path.join(os.path.dirname(BASE_DIR), "ui/dist")
+# Resolve UI_DIST_DIR: Check installed location (wheel) first, then dev location
+_ui_dist_wheel = os.path.join(BASE_DIR, "ui/dist")
+_ui_dist_dev = os.path.join(os.path.dirname(BASE_DIR), "ui/dist")
+
+if os.path.exists(_ui_dist_wheel) and os.path.isdir(_ui_dist_wheel):
+    UI_DIST_DIR = _ui_dist_wheel
+else:
+    UI_DIST_DIR = _ui_dist_dev
 
 # Models
 class CodePayload(BaseModel):
