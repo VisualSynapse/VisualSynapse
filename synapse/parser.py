@@ -513,8 +513,8 @@ def get_visual_base_mcp(graph_instance):
     from mcp.server.fastmcp import FastMCP
     
     mcp = FastMCP(
-        "visual-synapse",
-        description="""
+        name="visual-synapse",
+        instructions="""
         Visual-Synapse: 
         Create low-level, line-by-line maps of code logics, decisions, and changes to preserve intent and prevent breakdowns.
         Tracks every line's importance, input/output chains, and module impacts per workspace session.
