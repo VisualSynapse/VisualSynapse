@@ -195,7 +195,7 @@ def search_nodes(session_id: str, query: str) -> str:
     Use this to find specific nodes by label, ID, or type without retrieving the entire graph.
     
     Args:
-        session_id: The session ID to search in.
+        session_id: The session ID to search in. Pass "*" or "all" to search ALL sessions.
         query: The search string (case-insensitive).
         
     Returns:

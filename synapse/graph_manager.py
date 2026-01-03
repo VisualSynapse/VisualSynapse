@@ -257,23 +257,38 @@ class GraphManager:
         }
 
     def search_nodes(self, session_id, query):
-        """Search nodes by matching query against id, label, or type (case-insensitive)."""
+        """Search nodes by matching query against id, label, or type (case-insensitive). Support session_id='*' for global search."""
         query_lower = query.lower()
         
-        with self._get_conn(session_id) as conn:
-            cursor = conn.execute("SELECT data_json FROM nodes")
-            rows = cursor.fetchall()
-        
-        results = []
-        for r in rows:
-            data = json.loads(r['data_json'])
-            # Check if query matches id, label, or type
-            if (query_lower in data.get('id', '').lower() or 
-                query_lower in data.get('label', '').lower() or 
-                query_lower in data.get('type', '').lower()):
-                results.append(data)
-        
-        return results
+        def _search_single(_sid):
+            try:
+                with self._get_conn(_sid) as conn:
+                    cursor = conn.execute("SELECT data_json FROM nodes")
+                    rows = cursor.fetchall()
+                
+                found = []
+                for r in rows:
+                    data = json.loads(r['data_json'])
+                    # Check if query matches id, label, or type
+                    if (query_lower in data.get('id', '').lower() or 
+                        query_lower in data.get('label', '').lower() or 
+                        query_lower in data.get('type', '').lower() or
+                        query_lower in str(data.get('description', '')).lower()):
+                        # Add session context for global search clarity
+                        data['_session_id'] = _sid
+                        found.append(data)
+                return found
+            except Exception as e:
+                logger.error(f"Search failed for session {_sid}: {e}")
+                return []
+
+        if session_id == "*" or session_id is None:
+            all_results = []
+            for sid in self.list_sessions():
+                all_results.extend(_search_single(sid))
+            return all_results
+        else:
+            return _search_single(session_id)
 
     def get_metrics(self, session_id):
         with self._get_conn(session_id) as conn:

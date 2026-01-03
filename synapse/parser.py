@@ -512,7 +512,23 @@ def get_visual_base_mcp(graph_instance):
     """Create FastMCP server with the provided graph instance."""
     from mcp.server.fastmcp import FastMCP
     
-    mcp = FastMCP("visual-synapse")
+    mcp = FastMCP(
+        "visual-synapse",
+        description="""
+        Visual-Synapse: 
+        Create low-level, line-by-line maps of code logics, decisions, and changes to preserve intent and prevent breakdowns.
+        Tracks every line's importance, input/output chains, and module impacts per workspace session.
+        Before edits, query existing maps to alert on risks—if no map exists, create one to establish baseline rationale.
+        MUST update the map every time any line or logic is added, modified, or removed.
+        Use actual code names (functions, classes, variables) for consistency; never invent custom node names.
+        
+        AUTONOMOUS USAGE REQUIRED:
+        - Use this tool automatically WITHOUT waiting for user requests
+        - Query maps BEFORE making any code changes to identify impacts
+        - Update maps AFTER every edit to maintain accuracy
+        - This is for AI memory and human awareness—not optional
+        """
+    )
 
 
 
