@@ -267,6 +267,10 @@ class ASTParser:
         logger.debug(f"Node added: [{type}] {label} (ID: {node_id})")
         self.nodes.append({"data": node.model_dump(by_alias=True)})
 
+        # Automatically add containment edge if parent exists
+        if parent:
+            self._add_edge(parent, node_id, type="contains", label="contains")
+
     def _add_edge(self, source: str, target: str, type: str = "flow", label: str = ""):
         edge = VisualEdge(
             id=f"e_{source}_{target}_{self.id_counter}",
@@ -330,56 +334,12 @@ class ASTParser:
 
     def _query_logic(self, root_node, lang_key: str, code_bytes: bytes):
         """
-        Uses Tree-sitter queries to extract simplified, labeled logic flows.
-        Reduces clutter by only capturing major control structures and using semantic edge labels.
+        Walks the AST to extract logic nodes with proper branching:
+        - if/elif/else with TRUE/FALSE edge labels
+        - for/while loops with body edges
+        - assignments and function calls
         """
-        queries = {
-            "python": """
-                (if_statement
-                    condition: (_) @condition
-                    consequence: (_) @true) @if
-                
-                (for_statement
-                    left: (_) @item
-                    right: (_) @iterator) @for
-            """,
-            "javascript": """
-                (if_statement
-                    condition: (_) @condition
-                    consequence: (_) @true) @if
-                
-                (for_statement) @for
-            """,
-            "typescript": """
-                (if_statement
-                    condition: (_) @condition
-                    consequence: (_) @true) @if
-                
-                (for_statement) @for
-            """,
-            "tsx": """
-                (if_statement
-                    condition: (_) @condition
-                    consequence: (_) @true) @if
-                    
-                (for_statement) @for
-            """
-        }
-
-        query_str = queries.get(lang_key, queries["python"])
-        lang = self._get_language(lang_key)
         
-        try:
-            # New Tree-sitter 0.25 API usage
-            query = Query(lang, query_str)
-            cursor = QueryCursor(query)
-            matches = cursor.matches(root_node)
-            
-        except Exception as e:
-            logger.error(f"Query execution failed for {lang_key}: {e}")
-            return
-
-        # Helper to find parent structural node
         def find_parent_scope(node):
             curr = node
             while curr:
@@ -388,80 +348,339 @@ class ASTParser:
                     if name_node:
                         func_name = name_node.text.decode('utf8')
                         for n in self.nodes:
-                             if n['data']['type'] == 'function' and n['data']['label'] == func_name:
-                                 return n['data']['id']
+                            if n['data']['type'] == 'function' and n['data']['label'] == func_name:
+                                return n['data']['id']
                 if curr.type == 'program' or curr.type == 'module':
                     return self.file_root_id
                 curr = curr.parent
             return self.file_root_id
 
         processed_nodes = set()
-        # Track the last logic node added in each scope to create a chain
-        scope_last_node = {} # scope_id -> node_id
+        created_node_ids = {}  # ast_node.id -> our_node_id
+        
+        # Node type mappings per language
+        logic_types = {
+            "python": {
+                "if": "if_statement",
+                "elif": "elif_clause", 
+                "else": "else_clause",
+                "for": "for_statement",
+                "while": "while_statement",
+                "call": "call",
+                "assignment": "assignment",
+                "block": "block",
+            },
+            "javascript": {
+                "if": "if_statement",
+                "elif": None,
+                "else": "else_clause",
+                "for": "for_statement",
+                "while": "while_statement",
+                "call": "call_expression",
+                "assignment": "assignment_expression",
+                "block": "statement_block",
+            },
+            "typescript": {
+                "if": "if_statement",
+                "elif": None,
+                "else": "else_clause",
+                "for": "for_statement",
+                "while": "while_statement",
+                "call": "call_expression",
+                "assignment": "assignment_expression",
+                "block": "statement_block",
+            },
+            "tsx": {
+                "if": "if_statement",
+                "elif": None,
+                "else": "else_clause",
+                "for": "for_statement",
+                "while": "while_statement",
+                "call": "call_expression",
+                "assignment": "assignment_expression",
+                "block": "statement_block",
+            }
+        }
+        
+        types = logic_types.get(lang_key, logic_types["python"])
+        
+        def get_node_text(node, max_len=50):
+            if not node:
+                return ""
+            return node.text.decode('utf8')[:max_len].replace('\n', ' ')
+        
+        def create_node(node_id, label, node_type, parent_scope, lineno, ast_node):
+            self._add_node(node_id, label, node_type, parent=parent_scope, lineno=lineno)
+            created_node_ids[ast_node.id] = node_id
+            return node_id
+        
+        def get_first_child_node_id(block_node, check_self=False):
+            """Find the first meaningful node and return its created node_id.
+            If check_self=True, check if this node itself has an ID first."""
+            if not block_node:
+                return None
+            # Check if this node itself was created
+            if check_self and block_node.id in created_node_ids:
+                return created_node_ids[block_node.id]
+            # Check direct children
+            for child in block_node.children:
+                if child.id in created_node_ids:
+                    return created_node_ids[child.id]
+                # Only recurse into wrapper nodes like expression_statement, NOT into if bodies
+                if child.type in ['expression_statement', 'module', 'program']:
+                    result = get_first_child_node_id(child, check_self=True)
+                    if result:
+                        return result
+            return None
+        
+        def get_last_child_node_id(block_node, check_self=False):
+            """Find the last meaningful node in a block."""
+            if not block_node:
+                return None
+            if check_self and block_node.id in created_node_ids:
+                return created_node_ids[block_node.id]
+            for child in reversed(block_node.children):
+                if child.id in created_node_ids:
+                    return created_node_ids[child.id]
+                if child.type in ['expression_statement', 'module', 'program']:
+                    result = get_last_child_node_id(child, check_self=True)
+                    if result:
+                        return result
+            return None
+        
+        def get_node_or_first_child(ast_node):
+            """Get this node's ID if it was created, or find first created child."""
+            if ast_node.id in created_node_ids:
+                return created_node_ids[ast_node.id]
+            return get_first_child_node_id(ast_node, check_self=True)
 
-        # Iterate over matches (list of (pattern_index, captures_dict))
-        for match_idx, captures in matches:
-            # Captures is a dict: { 'capture_name': [Node, Node, ...] }
+        # Pass 1: Create all nodes
+        def walk_create_nodes(node, depth=0):
+            if node.id in processed_nodes:
+                return
             
-            if 'if' in captures:
-                main_node = captures['if'][0]
-                if main_node.id in processed_nodes: continue
-                processed_nodes.add(main_node.id)
+            node_type = node.type
+            lineno = node.start_point[0] + 1
+            parent_scope = find_parent_scope(node)
+            
+            if node_type == types["if"]:
+                processed_nodes.add(node.id)
+                cond_node = node.child_by_field_name('condition')
+                cond_text = get_node_text(cond_node) if cond_node else "?"
                 
-                parent_scope_id = find_parent_scope(main_node)
-                
-                cond_text = "condition"
-                if 'condition' in captures:
-                     cond_text = captures['condition'][0].text.decode('utf8')[:60]
-
-                lineno = main_node.start_point[0]+1
                 logic_id = self._get_id("if")
-                self._add_node(
-                    logic_id, 
-                    f"L{lineno}: if ({cond_text})", 
-                    "logic", 
-                    parent=parent_scope_id, 
-                    lineno=lineno
-                )
-                logger.info(f"Flow: Extracted 'if' statement at L{lineno}")
+                create_node(logic_id, f"L{lineno}: if ({cond_text})", "logic", parent_scope, lineno, node)
+                logger.debug(f"Created if node at L{lineno}")
                 
-                # Auto-Refine: Add Flow Edge
-                if parent_scope_id in scope_last_node:
-                    source = scope_last_node[parent_scope_id]
-                    self._add_edge(source, logic_id, type="flow", label="next")
+                for child in node.children:
+                    walk_create_nodes(child, depth + 1)
+                return
+            
+            if types.get("elif") and node_type == types["elif"]:
+                processed_nodes.add(node.id)
+                cond_node = node.child_by_field_name('condition')
+                cond_text = get_node_text(cond_node) if cond_node else "?"
                 
-                # Update chain
-                scope_last_node[parent_scope_id] = logic_id
+                logic_id = self._get_id("elif")
+                create_node(logic_id, f"L{lineno}: elif ({cond_text})", "branch", parent_scope, lineno, node)
+                logger.debug(f"Created elif node at L{lineno}")
                 
-            elif 'for' in captures:
-                main_node = captures['for'][0]
-                if main_node.id in processed_nodes: continue
-                processed_nodes.add(main_node.id)
+                for child in node.children:
+                    walk_create_nodes(child, depth + 1)
+                return
+            
+            if node_type == types["else"]:
+                processed_nodes.add(node.id)
                 
-                parent_scope_id = find_parent_scope(main_node)
+                logic_id = self._get_id("else")
+                create_node(logic_id, f"L{lineno}: else", "branch", parent_scope, lineno, node)
+                logger.debug(f"Created else node at L{lineno}")
                 
-                iter_text = ""
-                if 'iterator' in captures:
-                    iter_text = " in " + captures['iterator'][0].text.decode('utf8')[:30]
+                for child in node.children:
+                    walk_create_nodes(child, depth + 1)
+                return
+            
+            if node_type == types["for"]:
+                processed_nodes.add(node.id)
+                item_node = node.child_by_field_name('left')
+                iter_node = node.child_by_field_name('right')
                 
-                lineno = main_node.start_point[0]+1
-                logic_id = self._get_id("loop")
-                self._add_node(
-                    logic_id, 
-            f"L{lineno}: Loop{iter_text}",
-                    "logic",
-                    parent=parent_scope_id,
-                    lineno=lineno
-                )
-                logger.info(f"Flow: Extracted 'loop' at L{lineno}")
-
-                # Auto-Refine: Add Flow Edge
-                if parent_scope_id in scope_last_node:
-                    source = scope_last_node[parent_scope_id]
-                    self._add_edge(source, logic_id, type="flow", label="next")
-
-                # Update chain
-                scope_last_node[parent_scope_id] = logic_id
+                if not item_node:
+                    item_node = node.child_by_field_name('init')
+                    iter_node = node.child_by_field_name('condition')
+                
+                item_text = get_node_text(item_node) if item_node else ""
+                iter_text = get_node_text(iter_node) if iter_node else ""
+                
+                label = f"L{lineno}: for {item_text}"
+                if iter_text:
+                    label += f" in {iter_text}"
+                
+                logic_id = self._get_id("for")
+                create_node(logic_id, label, "logic", parent_scope, lineno, node)
+                logger.debug(f"Created for node at L{lineno}")
+                
+                for child in node.children:
+                    walk_create_nodes(child, depth + 1)
+                return
+            
+            if node_type == types["while"]:
+                processed_nodes.add(node.id)
+                cond_node = node.child_by_field_name('condition')
+                cond_text = get_node_text(cond_node) if cond_node else "?"
+                
+                logic_id = self._get_id("while")
+                create_node(logic_id, f"L{lineno}: while ({cond_text})", "logic", parent_scope, lineno, node)
+                logger.debug(f"Created while node at L{lineno}")
+                
+                for child in node.children:
+                    walk_create_nodes(child, depth + 1)
+                return
+            
+            if node_type == types["assignment"]:
+                processed_nodes.add(node.id)
+                left_node = node.child_by_field_name('left')
+                right_node = node.child_by_field_name('right')
+                
+                var_name = get_node_text(left_node, 30) if left_node else "?"
+                value_text = get_node_text(right_node, 40) if right_node else "?"
+                
+                logic_id = self._get_id("assign")
+                create_node(logic_id, f"L{lineno}: {var_name} = {value_text}", "data", parent_scope, lineno, node)
+                logger.debug(f"Created assignment node at L{lineno}")
+                return
+            
+            if node_type == types["call"]:
+                processed_nodes.add(node.id)
+                func_node = node.child_by_field_name('function')
+                args_node = node.child_by_field_name('arguments')
+                
+                func_name = get_node_text(func_node, 30) if func_node else "?"
+                args_text = get_node_text(args_node, 40) if args_node else "()"
+                
+                logic_id = self._get_id("call")
+                create_node(logic_id, f"L{lineno}: {func_name}{args_text}", "call_step", parent_scope, lineno, node)
+                logger.debug(f"Created call node at L{lineno}")
+                return
+            
+            for child in node.children:
+                walk_create_nodes(child, depth + 1)
+        
+        # Pass 2: Create edges with proper branching
+        def walk_create_edges(node, prev_node_id=None):
+            node_type = node.type
+            my_node_id = created_node_ids.get(node.id)
+            
+            if node_type == types["if"]:
+                if_node_id = my_node_id
+                
+                # Connect previous to this if
+                if prev_node_id:
+                    self._add_edge(prev_node_id, if_node_id, type="flow", label="next")
+                
+                branch_exits = []  # collect exit points of all branches
+                
+                # Find consequence (true block) and alternatives
+                consequence = node.child_by_field_name('consequence')
+                if consequence:
+                    first_in_true = get_first_child_node_id(consequence)
+                    if first_in_true:
+                        self._add_edge(if_node_id, first_in_true, type="flow", label="true")
+                    last_in_true = get_last_child_node_id(consequence)
+                    if last_in_true:
+                        branch_exits.append(last_in_true)
+                    # Recurse into true block
+                    walk_create_edges(consequence, None)
+                
+                # Find elif/else clauses
+                last_branch_node = if_node_id
+                for child in node.children:
+                    if types.get("elif") and child.type == types["elif"]:
+                        elif_node_id = created_node_ids.get(child.id)
+                        if elif_node_id:
+                            self._add_edge(last_branch_node, elif_node_id, type="flow", label="false")
+                            
+                            # elif's consequence
+                            elif_body = child.child_by_field_name('consequence')
+                            if elif_body:
+                                first_in_elif = get_first_child_node_id(elif_body)
+                                if first_in_elif:
+                                    self._add_edge(elif_node_id, first_in_elif, type="flow", label="true")
+                                last_in_elif = get_last_child_node_id(elif_body)
+                                if last_in_elif:
+                                    branch_exits.append(last_in_elif)
+                                walk_create_edges(elif_body, None)
+                            
+                            last_branch_node = elif_node_id
+                    
+                    elif child.type == types["else"]:
+                        else_node_id = created_node_ids.get(child.id)
+                        if else_node_id:
+                            self._add_edge(last_branch_node, else_node_id, type="flow", label="false")
+                            
+                            # else's body
+                            for else_child in child.children:
+                                if else_child.type == types.get("block", "block"):
+                                    first_in_else = get_first_child_node_id(else_child)
+                                    if first_in_else:
+                                        self._add_edge(else_node_id, first_in_else, type="flow", label="body")
+                                    last_in_else = get_last_child_node_id(else_child)
+                                    if last_in_else:
+                                        branch_exits.append(last_in_else)
+                                    walk_create_edges(else_child, None)
+                            
+                            last_branch_node = else_node_id
+                
+                # Return the branch exits for the caller to connect to next statement
+                return branch_exits if branch_exits else [if_node_id]
+            
+            elif node_type == types["for"] or node_type == types["while"]:
+                loop_node_id = my_node_id
+                
+                if prev_node_id:
+                    self._add_edge(prev_node_id, loop_node_id, type="flow", label="next")
+                
+                # Find body
+                body = node.child_by_field_name('body')
+                if body:
+                    first_in_body = get_first_child_node_id(body)
+                    if first_in_body:
+                        self._add_edge(loop_node_id, first_in_body, type="flow", label="iterate")
+                    walk_create_edges(body, None)
+                
+                return [loop_node_id]
+            
+            elif my_node_id:
+                # Regular node (assignment, call, etc)
+                if prev_node_id:
+                    self._add_edge(prev_node_id, my_node_id, type="flow", label="next")
+                return [my_node_id]
+            
+            else:
+                # Container node - process children sequentially
+                pending_exits = []  # exits from previous child that need to connect to next
+                
+                for child in node.children:
+                    # Get this child's node ID, or first created node inside it
+                    child_first = get_node_or_first_child(child)
+                    
+                    # Connect all pending exits to this child's first node
+                    if child_first and pending_exits:
+                        for exit_node in pending_exits:
+                            label = "merge" if len(pending_exits) > 1 else "next"
+                            self._add_edge(exit_node, child_first, type="flow", label=label)
+                        pending_exits = []
+                    
+                    # Process this child and collect its exits
+                    exits = walk_create_edges(child, None)
+                    if exits:
+                        pending_exits = exits
+                
+                return pending_exits
+        
+        # Execute passes
+        walk_create_nodes(root_node)
+        walk_create_edges(root_node)
 
 
 
@@ -521,8 +740,8 @@ def get_visual_base_mcp(graph_instance):
         Before edits, query existing maps to alert on risks—if no map exists, create one to establish baseline rationale.
         MUST update the map every time any line or logic is added, modified, or removed.
         Use actual code names (functions, classes, variables) for consistency; never invent custom node names.
-        
-        AUTONOMOUS USAGE REQUIRED:
+        Generally you have to create nodes and edges based on the code.
+        AUTONOMOUS REQUIRED:
         - Use this tool automatically WITHOUT waiting for user requests
         - Query maps BEFORE making any code changes to identify impacts
         - Update maps AFTER every edit to maintain accuracy
@@ -530,24 +749,38 @@ def get_visual_base_mcp(graph_instance):
         """
     )
 
-
-
     @mcp.tool()
-    def static_visualize_flow(code_or_file: str, detail_level: str = "full", session_id: str = "default", overwrite: bool = False) -> str:
+
+    def static_visualize_flow(workspace_path: str, code_or_file: str, detail_level: str = "full", overwrite: bool = False, session_id: Optional[str] = None) -> str:
         """
-        Parses code (Python, JS, TS) and populates a specific graph session with a Hierarchical Layout.
-        
-        Layout Strategy:
-        - **Hierarchy**: Nodes are arranged top-to-bottom based on containment (File > Class > Function > Logic).
-        - **Timeline (X-Axis)**: All nodes are sorted strictly left-to-right based on line number (Source Order).
-        - **Progressive Discovery**: Use the UI to explore large graphs by expanding/collapsing parent containers.
+        Don't use until explicitly asked by the me.
+        Parses code (Python, JS, TS) and populates the graph session (active or explicit) with a Hierarchical Layout.
         
         Args:
+            workspace_path: Absolute path to the workspace (uses active session).
             code_or_file: Raw code string or path to a source file.
             detail_level: 'full' (all details), 'medium' (logic only), or 'summary' (classes/functions only).
-            session_id: Target graph session ID.
             overwrite: If True, clears the existing graph before adding new nodes. Defaults to False (Append).
+            session_id: Optional. Explicit session ID to use instead of active session.
         """
+        # Resolve active session locally to avoid circular imports
+        target_session = session_id
+        if not target_session:
+            try:
+                config_dir = os.path.join(workspace_path, ".visualsynapse")
+                active_file = os.path.join(config_dir, "active_session.txt")
+                if os.path.exists(active_file):
+                    with open(active_file, 'r') as f:
+                        target_session = f.read().strip()
+                    logger.info(f"Resolved active session for visualization: {target_session}")
+                else:
+                    return f"Error: No active session found for workspace {workspace_path} and no session_id provided."
+            except Exception as e:
+                return f"Error resolving session: {str(e)}"
+        
+        session_id = target_session
+
+
         code = ""
         if os.path.exists(code_or_file) and os.path.isfile(code_or_file):
             with open(code_or_file, 'r', encoding='utf-8') as f:
@@ -558,7 +791,7 @@ def get_visual_base_mcp(graph_instance):
         parser = ASTParser()
         try:
             fname = os.path.basename(code_or_file) if os.path.exists(code_or_file) else "snippet"
-            logger.info(f"Static visualization requested for {fname}")
+            logger.info(f"Static visualization requested for {fname} in session {session_id}")
             result = parser.parse_code(code, filename=fname, detail_level=detail_level)
             
             # Populate UI Graph
@@ -566,6 +799,7 @@ def get_visual_base_mcp(graph_instance):
                 graph_instance.clear_graph(session_id)
             for node in result["elements"]["nodes"]:
                 d = node["data"]
+                # Filter unknown types if necessary, or let GraphManager handle defaulting
                 graph_instance.add_node(session_id, d["id"], d["label"], d["type"], {k:v for k,v in d.items() if k not in ["id", "label", "type"]})
             for edge in result["elements"]["edges"]:
                 d = edge["data"]
