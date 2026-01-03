@@ -34,23 +34,146 @@ graph = GraphManager(sessions_dir=SESSIONS_DIR)
 parser = ASTParser()
 mcp = get_visual_base_mcp(graph)
 
+
+def _get_workspace_config_dir(workspace_path: str):
+    """Get or create .visualsynapse directory in specified workspace."""
+    workspace_dir = os.path.join(workspace_path, ".visualsynapse")
+    if not os.path.exists(workspace_dir):
+        os.makedirs(workspace_dir)
+    return workspace_dir
+
+
+def _get_active_session(workspace_path: str) -> Optional[str]:
+    """Get the active session for a workspace from its config."""
+    config_dir = os.path.join(workspace_path, ".visualsynapse")
+    active_file = os.path.join(config_dir, "active_session.txt")
+    
+    if os.path.exists(active_file):
+        try:
+            with open(active_file, 'r') as f:
+                return f.read().strip()
+        except IOError:
+            pass
+    return None
+
+
+def _set_active_session(workspace_path: str, session_id: str):
+    """Set the active session for a workspace."""
+    config_dir = _get_workspace_config_dir(workspace_path)
+    active_file = os.path.join(config_dir, "active_session.txt")
+    
+    with open(active_file, 'w') as f:
+        f.write(session_id)
+    logger.info(f"Set active session for {workspace_path}: {session_id}")
+
+
+def _resolve_session(workspace_path: Optional[str], session_id: Optional[str] = None) -> str:
+    """Resolve session ID - use provided one or get active from workspace."""
+    if session_id:
+        return session_id
+    
+    if workspace_path:
+        active = _get_active_session(workspace_path)
+        if active:
+            return active
+    
+    raise ValueError(f"No session_id provided and no active session set for workspace: {workspace_path}")
+
+
+def _register_session_to_workspace(session_id: str, workspace_path: str):
+    """Add session to workspace's sessions.json for AI context."""
+    config_dir = _get_workspace_config_dir(workspace_path)
+    sessions_file = os.path.join(config_dir, "sessions.json")
+    
+    sessions = []
+    if os.path.exists(sessions_file):
+        try:
+            with open(sessions_file, 'r') as f:
+                sessions = json.load(f)
+        except (json.JSONDecodeError, IOError):
+            sessions = []
+    
+    if session_id not in sessions:
+        sessions.append(session_id)
+        with open(sessions_file, 'w') as f:
+            json.dump(sessions, f, indent=2)
+        logger.info(f"Registered session '{session_id}' to workspace: {workspace_path}")
+
+
 @mcp.tool()
-def create_session(session_id: str) -> str:
+def create_session(session_id: str, workspace_path: str) -> str:
     """
-    Creates a new graph session.
+    Creates a new graph session and sets it as active for the workspace.
     
     IMPORTANT: Only create a new session when explicitly requested by the user.
     When working with the same codebase or making incremental changes to existing graphs,
-    reuse the current session instead of creating a new one. Creating unnecessary sessions
-    clutters the workspace and loses context from previous work.
+    reuse the current session instead of creating a new one.
     
     Args:
         session_id: A unique identifier for the session.
+        workspace_path: Absolute path to the workspace directory.
     """
-    logger.info(f"Tool Call: create_session(session_id={session_id})")
+    logger.info(f"Tool Call: create_session(session_id={session_id}, workspace={workspace_path})")
     if graph.create_session(session_id):
-        return f"Session '{session_id}' created."
+        if os.path.isdir(workspace_path):
+            _register_session_to_workspace(session_id, workspace_path)
+            _set_active_session(workspace_path, session_id)
+            return f"Session '{session_id}' created and set as active for workspace."
+        return f"Session '{session_id}' created (workspace path invalid: {workspace_path})."
+    
     return f"Session '{session_id}' already exists."
+
+
+@mcp.tool()
+def set_active_session(workspace_path: str, session_id: str) -> str:
+    """
+    Sets the active session for a workspace. Subsequent tool calls can omit session_id.
+    
+    Args:
+        workspace_path: Absolute path to the workspace directory.
+        session_id: The session ID to set as active.
+    """
+    logger.info(f"Tool Call: set_active_session(workspace={workspace_path}, session={session_id})")
+    
+    if session_id not in graph.list_sessions():
+        return f"Error: Session '{session_id}' does not exist."
+    
+    _set_active_session(workspace_path, session_id)
+    return f"Active session for workspace set to '{session_id}'."
+
+
+@mcp.tool()
+def get_workspace_sessions(workspace_path: str) -> str:
+    """
+    Lists sessions for a workspace and shows the currently active one.
+    Use this first when entering a workspace to discover available sessions.
+    
+    Args:
+        workspace_path: Absolute path to the workspace directory.
+    
+    Returns:
+        JSON with workspace path, sessions list, and active session.
+    """
+    logger.info(f"Tool Call: get_workspace_sessions(workspace={workspace_path})")
+    config_dir = os.path.join(workspace_path, ".visualsynapse")
+    sessions_file = os.path.join(config_dir, "sessions.json")
+    
+    sessions = []
+    if os.path.exists(sessions_file):
+        try:
+            with open(sessions_file, 'r') as f:
+                sessions = json.load(f)
+        except (json.JSONDecodeError, IOError):
+            sessions = []
+    
+    active = _get_active_session(workspace_path)
+    
+    return json.dumps({
+        "workspace": workspace_path,
+        "sessions": sessions,
+        "active_session": active,
+        "hint": "Use active_session, or set_active_session to switch"
+    }, indent=2)
 
 
 
@@ -81,13 +204,13 @@ def delete_session(session_id: str) -> str:
     return f"Session '{session_id}' not found."
 
 @mcp.tool()
-def add_custom_node(session_id: str, node_id: str, label: str, node_type: str, metadata: Optional[Dict[str, Any]] = None) -> str:
+def add_custom_node(workspace_path: str, node_id: str, label: str, node_type: str, metadata: Optional[Dict[str, Any]] = None, session_id: Optional[str] = None) -> str:
     """
     Adds a custom node to a specific session graph.
     Use this tool to manually insert nodes representing code entities, logic steps, or data points.
 
     Args:
-        session_id: The target session ID (must exist).
+        workspace_path: Absolute path to the workspace (uses active session).
         node_id: A unique identifier for the node within the session.
         label: The text label displayed on the node in the UI.
         node_type: The category of the node, which determines its styling/icon. 
@@ -97,90 +220,123 @@ def add_custom_node(session_id: str, node_id: str, label: str, node_type: str, m
                   - 'lineno': Line number in source file (int).
                   - 'file': Source file path (str).
                   - 'description': Additional details (str).
+        session_id: Optional. Explicit session ID to use instead of active session.
     """
+    try:
+        session_id = _resolve_session(workspace_path, session_id)
+    except ValueError as e:
+        return str(e)
+
     logger.info(f"Tool Call: add_custom_node(session_id={session_id}, node_id={node_id}, label={label}, type={node_type})")
     graph.add_node(session_id, node_id, label, node_type, metadata)
     return f"Node '{label}' ({node_type}) added to session '{session_id}'."
 
 @mcp.tool()
-def remove_node(session_id: str, node_id: str) -> str:
+def remove_node(workspace_path: str, node_id: str, session_id: Optional[str] = None) -> str:
     """
-    Removes a node and its connections from a specific session.
-    Use this tool to delete a specific node. Any edges connected to this node will also be removed.
+    Removes a node and its connections from the session (active or explicit).
     
     Args:
-        session_id: The session ID.
+        workspace_path: Absolute path to the workspace (uses active session).
         node_id: The ID of the node to remove.
+        session_id: Optional. Explicit session ID to use instead of active session.
     """
+    try:
+        session_id = _resolve_session(workspace_path, session_id)
+    except ValueError as e:
+        return str(e)
+
     logger.info(f"Tool Call: remove_node(session_id={session_id}, node_id={node_id})")
     if graph.remove_node(session_id, node_id):
         return f"Node '{node_id}' removed."
     return f"Node '{node_id}' not found."
 
 @mcp.tool()
-def add_custom_edge(session_id: str, source: str, target: str, label: str, edge_type: str = "default") -> str:
+def add_custom_edge(workspace_path: str, source: str, target: str, label: str, edge_type: str = "default", session_id: Optional[str] = None) -> str:
     """
-    Adds a directed edge between two existing nodes in a session.
-    Use this tool to define relationships, control flow, or dependencies between nodes.
+    Adds a directed edge between two existing nodes.
 
     IMPORTANT: The 'label' parameter is REQUIRED. Always provide a descriptive label
     that explains the relationship (e.g., 'calls', 'returns', 'updates state', 'imports').
     Unlabeled edges make graphs unreadable.
 
     Args:
-        session_id: The target session ID.
+        workspace_path: Absolute path to the workspace (uses active session).
         source: The ID of the source node (must exist).
         target: The ID of the target node (must exist).
         label: REQUIRED. A descriptive text label for the edge (e.g., 'calls', 'imports', 'updates').
         edge_type: The semantic type of the connection (e.g., 'calls', 'imports', 'inherits', 'data_flow', 'flow').
                    Different types may be styled differently in the UI. Defaults to 'default'.
+        session_id: Optional. Explicit session ID to use instead of active session.
     """
+    try:
+        session_id = _resolve_session(workspace_path, session_id)
+    except ValueError as e:
+        return str(e)
+
     logger.info(f"Tool Call: add_custom_edge(session_id={session_id}, source={source}, target={target}, label={label})")
     eid = graph.add_edge(session_id, source, target, edge_type, label)
     return f"Edge '{label}' ({edge_type}) added: {source} -> {target}"
 
 @mcp.tool()
-def remove_edge(session_id: str, edge_id: str) -> str:
+def remove_edge(workspace_path: str, edge_id: str, session_id: Optional[str] = None) -> str:
     """
-    Removes a specific edge from a session.
+    Removes a specific edge from the session (active or explicit).
     Use this tool to remove a connection between nodes without deleting the nodes themselves.
     
     Args:
-        session_id: The session ID.
+        workspace_path: Absolute path to the workspace (uses active session).
         edge_id: The ID of the edge to remove.
+        session_id: Optional. Explicit session ID to use instead of active session.
     """
+    try:
+        session_id = _resolve_session(workspace_path, session_id)
+    except ValueError as e:
+        return str(e)
+
     logger.info(f"Tool Call: remove_edge(session_id={session_id}, edge_id={edge_id})")
     if graph.remove_edge(session_id, edge_id):
         return f"Edge '{edge_id}' removed."
     return f"Edge '{edge_id}' not found."
 
 @mcp.tool()
-def update_node_position(session_id: str, node_id: str, x: float, y: float) -> str:
+def update_node_position(workspace_path: str, node_id: str, x: float, y: float, session_id: Optional[str] = None) -> str:
     """
     Updates the visual position of a node in the graph.
-    Use this to programmatically arrange nodes or save AI-generated layouts.
-
+    
     Args:
-        session_id: The target session ID.
+        workspace_path: Absolute path to the workspace (uses active session).
         node_id: The ID of the node to move.
         x: The new X coordinate.
         y: The new Y coordinate.
+        session_id: Optional. Explicit session ID to use instead of active session.
     """
+    try:
+        session_id = _resolve_session(workspace_path, session_id)
+    except ValueError as e:
+        return str(e)
+
     logger.info(f"Tool Call: update_node_position(session_id={session_id}, node_id={node_id}, x={x}, y={y})")
     if graph.update_node_position(session_id, node_id, x, y):
         return f"Position updated for '{node_id}' to ({x}, {y})"
     return f"Node '{node_id}' not found in session '{session_id}'."
 
 @mcp.tool()
-def batch_update_positions(session_id: str, positions: List[Dict[str, Any]]) -> str:
+def batch_update_positions(workspace_path: str, positions: List[Dict[str, Any]], session_id: Optional[str] = None) -> str:
     """
     Updates positions for multiple nodes in one call.
     Use this for efficient bulk layout updates.
 
     Args:
-        session_id: The target session ID.
+        workspace_path: Absolute path to the workspace (uses active session).
         positions: A list of dicts, each with 'node_id', 'x', 'y' keys.
+        session_id: Optional. Explicit session ID to use instead of active session.
     """
+    try:
+        session_id = _resolve_session(workspace_path, session_id)
+    except ValueError as e:
+        return str(e)
+        
     logger.info(f"Tool Call: batch_update_positions(session_id={session_id}, count={len(positions)})")
     updated = 0
     for pos in positions:
@@ -189,41 +345,52 @@ def batch_update_positions(session_id: str, positions: List[Dict[str, Any]]) -> 
     return f"Updated positions for {updated}/{len(positions)} nodes."
 
 @mcp.tool()
-def search_nodes(session_id: str, query: str) -> str:
+def search_nodes(query: str, workspace_path: Optional[str] = None, session_id: Optional[str] = None) -> str:
     """
     Search for nodes in a session matching a query string.
     Use this to find specific nodes by label, ID, or type without retrieving the entire graph.
     
     Args:
-        session_id: The session ID to search in. Pass "*" or "all" to search ALL sessions.
         query: The search string (case-insensitive).
+        workspace_path: Optional. Absolute path to the workspace (uses active session).
+        session_id: Optional. Explicit session ID to search (e.g. "*" for all).
         
     Returns:
         A JSON string containing a list of matching node objects.
     """
+    try:
+        session_id = _resolve_session(workspace_path, session_id)
+    except ValueError as e:
+        return str(e)
+
     logger.info(f"Tool Call: search_nodes(session_id={session_id}, query={query})")
     results = graph.search_nodes(session_id, query)
     return json.dumps(results, indent=2)
 
 @mcp.tool()
-def find_node_id(session_id: str, query: str) -> str:
+def find_node_id(query: str, workspace_path: Optional[str] = None, session_id: Optional[str] = None) -> str:
     """
     Finds the unique ID of a node by name.
     Use this helper to resolve a readable name (e.g. "Processor") to its internal ID (e.g. "node_123") for other operations.
     
     Args:
-        session_id: The session ID.
         query: The node name or label to search for.
+        workspace_path: Optional. Absolute path to the workspace (uses active session).
+        session_id: Optional. Explicit session ID to use instead of active session.
     
     Returns:
         The exact ID string if found, or an error message if missing/ambiguous.
     """
+    try:
+        session_id = _resolve_session(workspace_path, session_id)
+    except ValueError as e:
+        return str(e)
+
     logger.info(f"Tool Call: find_node_id(session_id={session_id}, query={query})")
     results = graph.search_nodes(session_id, query)
     if not results:
         return f"Error: No node found matching '{query}'"
     if len(results) > 1:
-
         exact = next((n for n in results if n['label'] == query or n['id'] == query), None)
         if exact: return exact['id']
         matches = [f"{n['label']} ({n['id']})" for n in results]
@@ -232,22 +399,31 @@ def find_node_id(session_id: str, query: str) -> str:
     return results[0]['id']
 
 @mcp.tool()
-def add_child_node(session_id: str, parent_query: str, node_id: str, label: str, node_type: str, metadata: Optional[Dict[str, Any]] = None, edge_label: str = "", edge_type: str = "contains") -> str:
+def add_child_node(workspace_path: str, parent_query: str, node_id: str, label: str, node_type: str, edge_label: str, edge_type: str = "contains", metadata: Optional[Dict[str, Any]] = None, session_id: Optional[str] = None) -> str:
     """
     Adds a new node as a child of an existing node (found by name).
-    Use this to easily build hierarchy without knowing exact parent IDs.
+    Uses the active session for the workspace, unless session_id is explicitly provided.
+    
+    IMPORTANT: edge_label is REQUIRED. Provide a semantic description of WHY
+    this child connects to the parent.
     
     Args:
-        session_id: The target session.
+        workspace_path: Absolute path to the workspace (for resolving active session).
         parent_query: Name or ID of the parent node to search for.
         node_id: Unique ID for the new child node.
         label: Visual label for the child.
         node_type: Type of the child (e.g., 'function', 'logic', 'call_step').
+        edge_label: REQUIRED. Examples: 'contains', 'calls', 'returns to', 'modifies'.
+        edge_type: Semantic type (default: 'contains'). Options: 'contains', 'calls', 'data_flow', 'flow'.
         metadata: Optional extra data dictionary.
-        edge_label: Label to display on the parent-child edge (e.g., 'contains', 'inherits').
-        edge_type: Semantic type of edge (default: 'contains'). Options: 'contains', 'calls', 'data_flow'.
+        session_id: Optional. Explicit session ID to use instead of active session.
     """
-    logger.info(f"Tool Call: add_child_node(parent_query={parent_query}, child_id={node_id})")
+    try:
+        session_id = _resolve_session(workspace_path, session_id)
+    except ValueError as e:
+        return str(e)
+    
+    logger.info(f"Tool Call: add_child_node(session={session_id}, parent={parent_query}, child={node_id})")
     parent_results = graph.search_nodes(session_id, parent_query)
     parent_id = None
     
@@ -268,7 +444,7 @@ def add_child_node(session_id: str, parent_query: str, node_id: str, label: str,
     graph.add_node(session_id, node_id, label, node_type, metadata)
     graph.add_edge(session_id, parent_id, node_id, edge_type=edge_type, label=edge_label)
     
-    return f"Node '{label}' added as child of '{parent_query}' ({parent_id}) with edge."
+    return f"Node '{label}' added as child of '{parent_query}' with edge '{edge_label}'."
 
 @mcp.tool()
 def get_session_metrics(session_id: str) -> str:
@@ -287,79 +463,106 @@ def get_session_metrics(session_id: str) -> str:
     return json.dumps(metrics, indent=2)
 
 @mcp.tool()
-def find_path(session_id: str, source: str, target: str) -> str:
+def find_path(workspace_path: str, source: str, target: str, session_id: Optional[str] = None) -> str:
     """
     Finds the shortest path between two nodes in the graph.
     Use this to trace dependencies or debug control flow.
     
     Args:
-        session_id: The session ID.
+        workspace_path: Absolute path to the workspace (uses active session).
         source: The start node ID.
         target: The end node ID.
+        session_id: Optional. Explicit session ID to use instead of active session.
         
     Returns:
         A list of node IDs representing the path, or null if no path exists.
     """
-    logger.info(f"Tool Call: find_path(from={source}, to={target})")
+    try:
+        session_id = _resolve_session(workspace_path, session_id)
+    except ValueError as e:
+        return str(e)
+        
+    logger.info(f"Tool Call: find_path(session={session_id}, from={source}, to={target})")
     path = graph.find_path(session_id, source, target)
     if path:
         return f"Path found: {' -> '.join(path)}"
     return "No path found."
 
 @mcp.tool()
-def analyze_session(session_id: str) -> str:
+def analyze_session(workspace_path: str, session_id: Optional[str] = None) -> str:
     """
-    Analyzes the structure and health of a graph session.
+    Analyzes the structure and health of the graph session.
     Returns:
         JSON string containing checks for:
         - Orphan nodes (disconnected)
         - Broken edges (pointing to missing nodes)
         - Connectivity (fragmentation/components)
         - Node/Edge counts
+    Args:
+        workspace_path: Absolute path to the workspace (uses active session).
+        session_id: Optional. Explicit session ID to use instead of active session.
     """
-    logger.info(f"Tool Call: analyze_session(session_id={session_id})")
+    try:
+        session_id = _resolve_session(workspace_path, session_id)
+    except ValueError as e:
+        return str(e)
+        
+    logger.info(f"Tool Call: analyze_session(session={session_id})")
     report = graph.analyze_structure(session_id)
     return json.dumps(report, indent=2)
 
 @mcp.tool()
-def get_session_graph(session_id: str = "default") -> str:
+def get_session_graph(workspace_path: str, session_id: Optional[str] = None) -> str:
     """
-    Retrieves the complete graph structure for a specific session.
+    Retrieves the complete graph structure for the session (active or explicit).
     Use this tool to inspect the current state of the graph, including all nodes and edges.
     
     Args:
-        session_id: The session ID to query. defaults to "default".
+        workspace_path: Absolute path to the workspace (uses active session).
+        session_id: Optional. Explicit session ID to use instead of active session.
         
     Returns:
         A JSON string representation of the graph: { "elements": { "nodes": [...], "edges": [...] } }
     """
-    logger.info(f"Tool Call: get_session_graph(session_id={session_id})")
+    try:
+        session_id = _resolve_session(workspace_path, session_id)
+    except ValueError as e:
+        return str(e)
+        
+    logger.info(f"Tool Call: get_session_graph(session={session_id})")
     return json.dumps(graph.get_graph(session_id), indent=2)
 
 @mcp.tool()
-def clear_session_graph(session_id: str) -> str:
+def clear_session_graph(workspace_path: str, session_id: Optional[str] = None) -> str:
     """
-    Completely clears all nodes and edges from a specific session.
+    Completely clears all nodes and edges from the session (active or explicit).
     Use this tool to reset a session's graph to a blank state while keeping the session active.
     
     Args:
-        session_id: The session ID to clear.
+        workspace_path: Absolute path to the workspace (uses active session).
+        session_id: Optional. Explicit session ID to use instead of active session.
     """
-    logger.info(f"Tool Call: clear_session_graph(session_id={session_id})")
+    try:
+        session_id = _resolve_session(workspace_path, session_id)
+    except ValueError as e:
+        return str(e)
+        
+    logger.info(f"Tool Call: clear_session_graph(session={session_id})")
     graph.clear_graph(session_id)
     return f"Session '{session_id}' cleared."
 
 @mcp.tool()
-def load_session(session_id: str, file_path: str) -> str:
+
+def load_session(session_id: str, file_path: str, workspace_path: str) -> str:
     """
-    Loads a graph session from an external JSON backup file.
-    Use this to restore a previously exported session or import external data.
+    Loads a graph session from an external JSON backup file and registers it to the workspace.
     
     Args:
         session_id: The ID to assign to the loaded session.
         file_path: Absolute path to the JSON file containing the graph data.
+        workspace_path: Absolute path to the workspace (for registration).
     """
-    logger.info(f"Tool Call: load_session(session_id={session_id}, path={file_path})")
+    logger.info(f"Tool Call: load_session(session_id={session_id}, path={file_path}, workspace={workspace_path})")
     if not os.path.exists(file_path):
         return f"Error: File not found at {file_path}"
         
@@ -368,6 +571,9 @@ def load_session(session_id: str, file_path: str) -> str:
             data = json.load(f)
             
         graph.create_session(session_id)
+        if os.path.exists(workspace_path):
+            _register_session_to_workspace(session_id, workspace_path)
+            _set_active_session(workspace_path, session_id)
         
         # Expecting { elements: { nodes: [], edges: [] } } structure
         nodes = data.get("elements", {}).get("nodes", [])
@@ -385,24 +591,29 @@ def load_session(session_id: str, file_path: str) -> str:
             d = edge["data"]
             graph.add_edge(session_id, d["source"], d["target"], d["type"], d.get("label", ""))
             
-        return f"Successfully loaded {count} nodes into session '{session_id}' from {file_path}"
+        return f"Successfully loaded {count} nodes into session '{session_id}' from {file_path}. Active session set."
     except Exception as e:
         return f"Failed to load session: {str(e)}"
 
 @mcp.tool()
-def export_graph(session_id: str, format: str = "json") -> str:
+def export_graph(workspace_path: str, format: str = "json", session_id: Optional[str] = None) -> str:
     """
-    Exports the current graph session to a text format.
+    Exports the graph session (active or explicit) to a text format.
     
     Args:
-        session_id: The session to export.
+        workspace_path: Absolute path to the workspace (uses active session).
         format: 'json' (default) or 'markdown' (for structural documentation).
-                Note: Markdown format produces a Hierarchical Tree (Files > Classes > Functions > Logic) optimized for Markmap.
+        session_id: Optional. Explicit session ID to use instead of active session.
         
     Returns:
         The string representation of the graph in the requested format.
     """
-    logger.info(f"Tool Call: export_graph(session_id={session_id}, format={format})")
+    try:
+        session_id = _resolve_session(workspace_path, session_id)
+    except ValueError as e:
+        return str(e)
+        
+    logger.info(f"Tool Call: export_graph(session={session_id}, format={format})")
     data = graph.get_graph(session_id)
     
     if format.lower() == "json":
