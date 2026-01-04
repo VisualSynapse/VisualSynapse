@@ -1,11 +1,50 @@
-# VisualSynapse
+<div align="center">
+  <!-- <img src="assets/logo.jpeg" alt="VisualSynapse Hero" width="100%" /> -->
 
-<p align="center">
-  <img src="assets/showcase.png" alt="VisualSynapse Showcase" width="100%" style="border-radius: 10px; box-shadow: 0 10px 30px rgba(0,0,0,0.2);">
-</p>
+  # VisualSynapse
+  
+  **Your Codebase, Re-Imagined as a Living Organism.**
+  
+  [![Python](https://img.shields.io/badge/Python-3.10+-blue?style=for-the-badge&logo=python&logoColor=white)](https://python.org)
+  [![MCP](https://img.shields.io/badge/MCP-Enabled-green?style=for-the-badge)](https://modelcontextprotocol.io)
+  [![License](https://img.shields.io/badge/License-MIT-purple?style=for-the-badge)](LICENSE)
+</div>
 
-
+---
 A code visualization tool that turns source code, files, and entire folder structures into interactive graphs. With AI assistance, you can map anything from a single function to a full project hierarchy.
+
+## The Problem: When Coding with AI, You Can't See the Logic
+
+AI writes code at the speed of thought, but it lacks **sight**. When you generate functions, refactor modules, or debug errors in a chat window, you are working in fragmented, linear text.
+
+**You lose the Mental Map.**
+
+*   **Context Blindness**: You paste `main.py` but forget `utils.py`. The AI hallucinates a connection that doesn't exist because it can't "see" the import graph.
+*   **Structural Decay**: As you iterate with LLMs, spaghetti code forms not because the logic is bad, but because the *architecture* is invisible.
+*   **The Review Gap**: Reviewing 500 lines of AI-generated code is exhausting. You skim, you miss bugs, and you merge technical debt.
+
+**It's time to stop reading code and start seeing it.**
+
+<div align="center">
+  <img src="assets/showcase.png" alt="VisualSynapse UI Split View" width="100%" />
+</div>
+
+## The Solution: VisualSynapse
+
+VisualSynapse is an **MCP (Model Context Protocol) Server** that transforms your static codebase into a dynamic, queryable, and interactive knowledge graph. 
+
+It doesn't just "diagram" your code; it creates a persistent **Session**—a mental model of your workspace that you can explore, manipulate, and expand.
+
+### Key Usasge
+
+*   **⚡ Live Code Mapping**: Automatically parses Python, JS, and TS files to build a hierarchical graph of Files > Classes > Functions > Logic.
+*   **🕸️ Dead Code Detection**: Instantly spot "orphan nodes"—functions or classes with zero incoming edges.
+*   **🔎 Semantic Trace**: Use the `find_path` tool to discover the shortest route between two disparate parts of your system.
+*   **💾 Persistent Sessions**: Your graph isn't ephemeral. Create a session (`planning_auth_flow`), populate it, and come back to it days later.
+*   **🤖 LLM-Ready**: Designed specifically for AI Agents. Tools like `add_node`, `search_nodes`, and `analyze_session` give LLMs "eyes" on the architecture.
+
+> **Note:** Some of the Key Usage is far from current reality. Advanced features like Live Mapping and Semantic Trace are experimental/roadmap items. We are actively building towards this vision and welcome contributions.
+
 
 ## Installation
 
@@ -52,15 +91,6 @@ Add to your MCP config:
   }
 }
 ```
-
-## What it does
-
-When you're debugging or trying to understand unfamiliar code, you can ask your AI assistant to visualize it. The tool parses the code, extracts the structure (classes, functions, control flow), and displays it as an expandable graph in a web UI.
-
-This is useful when:
-- You want to see how functions relate to each other
-- You need to trace logic flow through conditionals and loops
-- You're exploring a new codebase and want a visual map
 
 
 
@@ -111,7 +141,9 @@ If you find a bug, open an issue with:
 - **Structural Analysis**: Built-in BFS (Breadth-First Search) algorithms to detect orphan nodes, calculate graph components, and validate edge integrity on every save.
 - **Pathfinding**: Optimized shortest-path algorithms to trace execution flow between any two code entities.
 
+---
 
-## License
-
-MIT
+<div align="center">
+  <b>Built by VisualSynapse</b><br>
+  <i>Architecting bridges between logic and culture.</i>
+</div>
