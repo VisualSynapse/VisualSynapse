@@ -7,10 +7,6 @@
 
 A code visualization tool that turns source code, files, and entire folder structures into interactive graphs. With AI assistance, you can map anything from a single function to a full project hierarchy.
 
-## Status
-
-Under active development. Core functionality works but expect rough edges.
-
 ## Installation
 
 ### Method 1: Run directly (Recommended)
